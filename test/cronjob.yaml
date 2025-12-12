@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: internal-kubectl
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: modify-pods
+rules:
+  - apiGroups: [""]
+    resources: ["pods","namespaces"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [ "" ]
+    resources: [ "pods/exec" ]
+    verbs: [ "create" ]
+  - apiGroups:
+      - apps
+    resources:
+      - daemonsets
+      - deployments
+      - replicasets
+      - statefulsets
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: modify-pods-to-sa
+roleRef:
+  kind: ClusterRole
+  name: modify-pods
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+  - kind: ServiceAccount
+    name: internal-kubectl
+    namespace: default
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: random-rollout-restart
+spec:
+  schedule: "*/5 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: internal-kubectl
+
+          restartPolicy: OnFailure
+          containers:
+            - name: rollout-restart
+              image: hrexed/kubectl:0.18
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+    
+                  # Define a list of namespaces
+                  namespaces="unguard otel-demo hipster-shop"
+                  echo "Available namespaces: $namespaces"
+              
+                  # Pick one namespace randomly
+                  ns=$(echo "$namespaces" | awk '{ split($0, arr, " "); srand(); print arr[int(rand() * length(arr)) + 1] }')
+                  echo "Selected namespace: $ns"
+                  
+                  
+                  resources=$(kubectl get deploy,ds -n $ns -o jsonpath='{range .items[*]}{.kind}{"|"}{.metadata.name}{"\n"}{end}')
+                  if [ -z "$resources" ]; then
+                   echo "No resources found in namespace $ns"
+                   exit 0
+                  fi
+                  
+                  selected=$(echo "$resources" | awk -v lines="$(echo "$resources" | wc -l)" 'BEGIN { srand(); line = int(rand() * lines) + 1 } NR == line { print }')
+                  kind=$(echo "$selected" | cut -d'|' -f1)
+                  name=$(echo "$selected" | cut -d'|' -f2)
+                  
+                  echo "Restarting $kind/$name in namespace $ns"
+                  kubectl rollout restart $kind/$name -n $ns
+

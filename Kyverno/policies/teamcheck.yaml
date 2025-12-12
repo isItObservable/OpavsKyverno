@@ -1,0 +1,53 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: check-label-owner
+spec:
+  rules:
+    - name: check-label-app
+      match:
+        any:
+          - resources:
+              kinds:
+                - Deployment
+                - StatefulSet
+                - DaemonSet
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - istio-system
+      validate:
+        failureAction: Audit
+        message: "The dt.owner `app` is required as a label or annoation."
+        pattern:
+          spec:
+            template:
+              metadata:
+                labels:
+                  dt.owner: "?*"
+
+    - name: check-annotation-app
+      match:
+        any:
+          - resources:
+              kinds:
+                - Deployment
+                - StatefulSet
+                - DaemonSet
+      exclude:
+        any:
+          - resources:
+              namespaces:
+                - kube-system
+                - istio-system
+      validate:
+        failureAction: Audit
+        message: "The dt.owner annotation `app` is required."
+        pattern:
+          spec:
+            template:
+              metadata:
+                annotations:
+                  dt.owner: "?*"

@@ -1,0 +1,363 @@
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel
+  labels:
+    app: opentelemetry
+    app.kubernetes.io/component: otel-statefullset
+spec:
+  mode: statefulset
+  replicas: 1
+  serviceAccount: otelcontribcol
+  image: otel/opentelemetry-collector-contrib:0.133.0
+  observability:
+    metrics:
+      enableMetrics: true
+  env:
+    - name: MY_POD_IP
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: status.podIP
+    - name: K8S_NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+    - name: DT_ENDPOINT
+      valueFrom:
+        secretKeyRef:
+          name: dynatrace
+          key: dynatrace_oltp_url
+    - name: DT_API_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: dynatrace
+          key: dt_api_token
+    - name: CLUSTERNAME
+      valueFrom:
+        secretKeyRef:
+          name: dynatrace
+          key: clustername
+    - name: OTEL_SERVICE_NAME
+      valueFrom:
+        fieldRef:
+          apiVersion: v1
+          fieldPath: metadata.labels['app.kubernetes.io/component']
+    - name: OTEL_RESOURCE_ATTRIBUTES
+      value: service.name=$(OTEL_SERVICE_NAME)
+  config:
+    receivers:
+
+
+
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: opentelemetry-collector
+              scrape_interval: 5s
+              static_configs:
+                - targets:
+                    - ${MY_POD_IP}:8888
+                    -
+            - job_name: 'istiod'
+              kubernetes_sd_configs:
+                - role: endpoints
+                  namespaces:
+                    names:
+                      - istio-system
+              relabel_configs:
+                - source_labels: [ __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name ]
+                  action: keep
+                  regex: istiod;http-monitoring
+            - job_name: kube-proxy
+              honor_labels: true
+              kubernetes_sd_configs:
+                - role: pod
+              relabel_configs:
+                - action: keep
+                  source_labels:
+                    - __meta_kubernetes_namespace
+                    - __meta_kubernetes_pod_name
+                  separator: '/'
+                  regex: 'kube-system/kube-proxy.+'
+
+                - source_labels:
+                    - __address__
+                  action: replace
+                  target_label: __address__
+                  regex: (.+?)(\\:\\d+)?
+                  replacement: $1:10249
+            - job_name: integrations/kubernetes/kubelet
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              kubernetes_sd_configs:
+                - role: node
+              relabel_configs:
+                - replacement: kubernetes.default.svc.cluster.local:443
+                  target_label: __address__
+                - regex: (.+)
+                  replacement: /api/v1/nodes/$${1}/proxy/metrics
+                  source_labels:
+                    - __meta_kubernetes_node_name
+                  target_label: __metrics_path__
+              scheme: https
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                insecure_skip_verify: false
+                server_name: kubernetes
+                # Scrape config for API servers
+            - job_name: "kubernetes-apiservers"
+              kubernetes_sd_configs:
+                - role: endpoints
+                  namespaces:
+                    names:
+                      - default
+              scheme: https
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                insecure_skip_verify: true
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              relabel_configs:
+                - source_labels: [ __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name ]
+                  action: keep
+                  regex: kubernetes;https
+                - action: replace
+                  source_labels:
+                    - __meta_kubernetes_namespace
+                  target_label: Namespace
+                - action: replace
+                  source_labels:
+                    - __meta_kubernetes_service_name
+                  target_label: Service
+            - job_name: kubernetes-pods
+              kubernetes_sd_configs:
+                  - role: pod
+              relabel_configs:
+                - action: keep
+                  regex: true
+                  source_labels:
+                    - __meta_kubernetes_pod_annotation_prometheus_io_scrape
+                - action: replace
+                  regex: (https?)
+                  source_labels:
+                    - __meta_kubernetes_pod_annotation_prometheus_io_scheme
+                  target_label: __scheme__
+                - action: replace
+                  regex: (.+)
+                  source_labels:
+                    - __meta_kubernetes_pod_annotation_prometheus_io_path
+                  target_label: __metrics_path__
+                - action: replace
+                  regex: ([^:]+)(?::\d+)?;(\d+)
+                  replacement: $1:$2
+                  source_labels:
+                    - __address__
+                    - __meta_kubernetes_pod_annotation_prometheus_io_port
+                  target_label: __address__
+                - action: labelmap
+                  regex: __meta_kubernetes_pod_label_(.+)
+                - action: replace
+                  source_labels:
+                    - __meta_kubernetes_namespace
+                  target_label: kubernetes_namespace
+                - action: replace
+                  source_labels:
+                    - __meta_kubernetes_pod_name
+                  target_label: kubernetes_pod_name
+                - action: drop
+                  regex: Pending|Succeeded|Failed
+                  source_labels:
+                    - __meta_kubernetes_pod_phase
+
+
+      otlp:
+        protocols:
+          grpc:
+            endpoint: ${MY_POD_IP}:4317
+          http:
+            cors:
+              allowed_origins:
+                - http://*
+                - https://*
+            endpoint: ${MY_POD_IP}:4318
+
+    processors:
+      batch:
+        send_batch_max_size: 1000
+        timeout: 30s
+        send_batch_size : 800
+
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 70
+        spike_limit_percentage: 30
+
+      cumulativetodelta: {}
+
+      k8sattributes/k8S:
+        extract:
+          metadata:
+            - k8s.cluster.uid
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.namespace.name
+      k8sattributes:
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.deployment.name
+            - k8s.statefulset.name
+            - k8s.daemonset.name
+            - k8s.cronjob.name
+            - k8s.namespace.name
+            - k8s.container.name
+            - k8s.node.name
+            - k8s.cluster.uid
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.name
+              - from: resource_attribute
+                name: k8s.namespace.name
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.ip
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+          - sources:
+              - from: connection
+      resource:
+        attributes:
+          - key: k8s.cluster.name
+            value: ${CLUSTERNAME}
+            action: insert
+          - key: dt.pipeline.source
+            value: "ENVOY"
+            action: insert
+
+
+
+      transform:
+        error_mode: ignore
+        log_statements:
+          - context: resource
+            statements:
+              - set(attributes["dt.kubernetes.workload.kind"], "statefulset") where IsString(attributes["k8s.statefulset.name"])
+              - set(attributes["dt.kubernetes.workload.name"], attributes["k8s.statefulset.name"]) where IsString(attributes["k8s.statefulset.name"])
+              - set(attributes["dt.kubernetes.workload.kind"], "deployment") where IsString(attributes["k8s.deployment.name"])
+              - set(attributes["dt.kubernetes.workload.name"], attributes["k8s.deployment.name"]) where IsString(attributes["k8s.deployment.name"])
+              - set(attributes["dt.kubernetes.workload.kind"], "daemonset") where IsString(attributes["k8s.daemonset.name"])
+              - set(attributes["dt.kubernetes.workload.name"], attributes["k8s.daemonset.name"]) where IsString(attributes["k8s.daemonset.name"])
+              - set(attributes["dt.kubernetes.cluster.id"], attributes["k8s.cluster.uid"]) where IsString(attributes["k8s.cluster.uid"])
+
+        trace_statements:
+          - context: resource
+            statements:
+              - set(attributes["dt.kubernetes.workload.kind"], "statefulset") where IsString(attributes["k8s.statefulset.name"])
+              - set(attributes["dt.kubernetes.workload.name"], attributes["k8s.statefulset.name"]) where IsString(attributes["k8s.statefulset.name"])
+              - set(attributes["dt.kubernetes.workload.kind"], "deployment") where IsString(attributes["k8s.deployment.name"])
+              - set(attributes["dt.kubernetes.workload.name"], attributes["k8s.deployment.name"]) where IsString(attributes["k8s.deployment.name"])
+              - set(attributes["dt.kubernetes.workload.kind"], "daemonset") where IsString(attributes["k8s.daemonset.name"])
+              - set(attributes["dt.kubernetes.workload.name"], attributes["k8s.daemonset.name"]) where IsString(attributes["k8s.daemonset.name"])
+              - set(attributes["dt.kubernetes.cluster.id"], attributes["k8s.cluster.uid"]) where IsString(attributes["k8s.cluster.uid"])
+
+        metric_statements:
+          - context: resource
+            statements:
+              - set(attributes["dt.kubernetes.workload.kind"], "statefulset") where IsString(attributes["k8s.statefulset.name"])
+              - set(attributes["dt.kubernetes.workload.name"], attributes["k8s.statefulset.name"]) where IsString(attributes["k8s.statefulset.name"])
+              - set(attributes["dt.kubernetes.workload.kind"], "deployment") where IsString(attributes["k8s.deployment.name"])
+              - set(attributes["dt.kubernetes.workload.name"], attributes["k8s.deployment.name"]) where IsString(attributes["k8s.deployment.name"])
+              - set(attributes["dt.kubernetes.workload.kind"], "daemonset") where IsString(attributes["k8s.daemonset.name"])
+              - set(attributes["dt.kubernetes.workload.name"], attributes["k8s.daemonset.name"]) where IsString(attributes["k8s.daemonset.name"])
+              - set(attributes["dt.kubernetes.cluster.id"], attributes["k8s.cluster.uid"]) where IsString(attributes["k8s.cluster.uid"])
+
+
+
+
+
+    exporters:
+
+      loadbalancing:
+        routing_key: "service"
+        protocol:
+          otlp:
+            # all options from the OTLP exporter are supported
+            # except the endpoint
+            timeout: 1s
+            tls:
+              insecure: true
+        resolver:
+          # use k8s service resolver, if collector runs in kubernetes environment
+          k8s:
+            service: otelback-collector.default
+      loadbalancing/metrics:
+        routing_key: "metric"
+        protocol:
+          otlp:
+            # all options from the OTLP exporter are supported
+            # except the endpoint
+            timeout: 1s
+            tls:
+              insecure: true
+        resolver:
+          # use k8s service resolver, if collector runs in kubernetes environment
+          k8s:
+            service: otelback-collector.default
+      otlphttp:
+        endpoint: ${DT_ENDPOINT}/api/v2/otlp
+        headers:
+          Authorization: "Api-Token ${DT_API_TOKEN}"
+      debug:
+        verbosity: detailed
+
+    connectors:
+      spanmetrics:
+        exemplars:
+          enabled: true
+        aggregation_temporality: "AGGREGATION_TEMPORALITY_DELTA"
+
+
+
+    service:
+      pipelines:
+
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter,k8sattributes,transform,batch]
+          exporters: [spanmetrics,otlphttp]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter,transform,cumulativetodelta,batch]
+          exporters: [otlphttp]
+        metrics/prom:
+          receivers: [ prometheus ]
+          processors: [ memory_limiter,k8sattributes,transform,cumulativetodelta,batch ]
+          exporters: [ otlphttp ]
+        metrics/span:
+          receivers: [ spanmetrics ]
+          exporters: [ otlphttp ]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter,k8sattributes,transform,resource,batch]
+          exporters: [otlphttp]
+
+      telemetry:
+        metrics:
+          readers:
+            - pull:
+                exporter:
+                  prometheus:
+                    host: ${MY_POD_IP}
+                    port: 8888
+                    without_units: true
+        traces:
+          processors:
+            - batch:
+                exporter:
+                  otlp:
+                    protocol: grpc
+                    endpoint: http://localhost:4317
+

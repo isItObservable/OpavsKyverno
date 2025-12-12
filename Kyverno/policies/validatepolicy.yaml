@@ -1,0 +1,62 @@
+apiVersion: policies.kyverno.io/v1alpha1
+kind: ValidatingPolicy
+metadata:
+  name: check-image-details
+spec:
+  evaluation:
+    admission:
+      enabled: false
+    background:
+      enabled: true
+  validationActions: [Audit]
+  matchConstraints:
+    resourceRules:
+      - apiGroups:   [""]
+        apiVersions: [v1]
+        operations:  [CREATE, UPDATE]
+        resources:   [pods]
+  variables:
+    - name: imageRef
+      expression: object.spec.containers[0].image
+    - name: imageKey
+      expression: variables.imageRef
+    - name: image
+      expression: image.GetMetadata(variables.imageKey)
+
+  validations:
+    - expression: variables.image != null
+      message: >-
+        Failed to retrieve image metadata
+
+    - expression: variables.image.config.architecture == "amd64"
+      messageExpression: >-
+        string(variables.image.config.architecture) + ' image architecture is not supported'
+---
+apiVersion: policies.kyverno.io/v1alpha1
+kind: ValidatingPolicy
+metadata:
+  name: check-images
+spec:
+  evaluation:
+    admission:
+      enabled: false
+    background:
+      enabled: true
+  validationActions: [ Audit ]
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  variables:
+    - name: images
+      expression: >-
+        object.spec.containers.map(e, parseImageReference(e.image))
+        + object.spec.?initContainers.orValue([]).map(e, parseImageReference(e.image))
+        + object.spec.?ephemeralContainers.orValue([]).map(e, parseImageReference(e.image))
+  validations:
+    - expression: >-
+        variables.images.map(i, i.containsDigest()).all(e, e)
+      message: >-
+        images must be specified using a digest

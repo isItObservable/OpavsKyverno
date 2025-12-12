@@ -1,0 +1,16 @@
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sPSPForbiddenSysctls
+metadata:
+  name: psp-forbidden-sysctls
+spec:
+  enforcementAction: warn
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+  parameters:
+    forbiddenSysctls:
+      # - "*" # * may be used to forbid all sysctls
+      - kernel.*
+    allowedSysctls:
+      - "*" # allows all sysctls. allowedSysctls is optional.

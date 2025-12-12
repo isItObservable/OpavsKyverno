@@ -1,0 +1,142 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  annotations:
+    helm.sh/hook: post-install
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+    helm.sh/hook-weight: "-5"
+
+  labels:
+    app: gatekeeper
+    app.kubernetes.io/instance: gatekeeper
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: gatekeeper
+    app.kubernetes.io/version: 3.20.1
+    chart: gatekeeper
+    gatekeeper.sh/system: "yes"
+    helm.sh/chart: gatekeeper-3.20.1
+    heritage: Helm
+    release: gatekeeper
+  name: gatekeeper-update-namespace-label
+  namespace: gatekeeper-system
+
+spec:
+  backoffLimit: 6
+  completionMode: NonIndexed
+  completions: 1
+  manualSelector: false
+  parallelism: 1
+  podReplacementPolicy: TerminatingOrFailed
+  selector:
+    matchLabels:
+      batch.kubernetes.io/controller-uid: 71ddac00-bf7d-436c-b10b-18ca63df5e54
+  suspend: false
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: gatekeeper
+        app.kubernetes.io/instance: gatekeeper
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: gatekeeper
+        app.kubernetes.io/version: 3.20.1
+        batch.kubernetes.io/controller-uid: 71ddac00-bf7d-436c-b10b-18ca63df5e54
+        batch.kubernetes.io/job-name: gatekeeper-update-namespace-label
+        chart: gatekeeper
+        controller-uid: 71ddac00-bf7d-436c-b10b-18ca63df5e54
+        gatekeeper.sh/system: "yes"
+        helm.sh/chart: gatekeeper-3.20.1
+        heritage: Helm
+        job-name: gatekeeper-update-namespace-label
+        release: gatekeeper
+    spec:
+      affinity: {}
+      containers:
+      - args:
+        - label
+        - ns
+        - gatekeeper-system
+        - admission.gatekeeper.sh/ignore=no-self-managing
+        - pod-security.kubernetes.io/audit=restricted
+        - pod-security.kubernetes.io/audit-version=latest
+        - pod-security.kubernetes.io/warn=restricted
+        - pod-security.kubernetes.io/warn-version=latest
+        - pod-security.kubernetes.io/enforce=restricted
+        - pod-security.kubernetes.io/enforce-version=v1.24
+        - --overwrite
+        image: openpolicyagent/gatekeeper-crds:v3.21.0-beta.0
+        imagePullPolicy: IfNotPresent
+        name: kubectl-label
+        resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 999
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      initContainers:
+      - args:
+        - --retry
+        - "99999"
+        - --retry-connrefused
+        - --retry-max-time
+        - "60"
+        - --retry-delay
+        - "1"
+        - --max-time
+        - "2"
+        - --cacert
+        - /certs/ca.crt
+        - -v
+        - https://gatekeeper-webhook-service.gatekeeper-system.svc/v1/admitlabel?timeout=2s
+        command:
+        - curl
+        image: curlimages/curl:8.12.0
+        imagePullPolicy: IfNotPresent
+        name: webhook-probe-post
+        resources: {}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsGroup: 999
+          runAsNonRoot: true
+          runAsUser: 1000
+          seccompProfile:
+            type: RuntimeDefault
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /certs
+          name: cert
+          readOnly: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      restartPolicy: OnFailure
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: gatekeeper-update-namespace-label
+      serviceAccountName: gatekeeper-update-namespace-label
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: cert
+        secret:
+          defaultMode: 420
+          secretName: gatekeeper-webhook-server-cert
+status:
+  active: 1
+  failed: 1
+  ready: 0
+  startTime: "2025-09-24T12:18:57Z"
+  terminating: 0
+  uncountedTerminatedPods: {}

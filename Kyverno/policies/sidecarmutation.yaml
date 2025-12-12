@@ -1,0 +1,41 @@
+apiVersion: policies.kyverno.io/v1alpha1
+kind: MutatingPolicy
+metadata:
+  name: inject-fluentbit-sidecar
+spec:
+  evaluation:
+    admission:
+      enabled: true
+    mutateExisting:
+      enabled: false
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  reinvocationPolicy: IfNeeded
+  mutations:
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: |
+          has(object.metadata.annotations["fluentbit/enabled"]) && object.metadata.annotations["fluentbit/enabled"] == "true" ?
+          {
+            spec: {
+              containers: object.spec.containers + [{
+                name: "fluentbit-sidecar",
+                image: object.metadata.annotations["fluentbit/image"],
+                args: ["-c", "/fluentbit/config/fluent-bit.conf"],
+                volumeMounts: [{
+                  name: "fluentbit-config",
+                  mountPath: "/fluentbit/config"
+                }]
+              }],
+              volumes: object.spec.volumes + [{
+                name: "fluentbit-config",
+                configMap: {
+                  name: object.metadata.annotations["fluentbit/configmap"]
+                }
+              }]
+            }
+          } : {}
