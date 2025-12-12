@@ -1,7 +1,7 @@
 # Is it Observable
 <p align="center"><img src="/image/logo.png" width="40%" alt="Is It observable Logo" /></p>
 
-## Episode : Kyverno
+## Episode : OPA vs Kyverno
 This repository contains the files utilized during the tutorial presented in the dedicated IsItObservable episode related the comparison between OPA Gatekeeper and Kyvero
 <p align="center"><img src="/image/Kyverno.png" width="20%" alt="Kyverno logo" /> vs <img src="/image/opa.png" width="20%" alt="Kyverno logo" /> </p>  
 
